@@ -1,0 +1,21 @@
+CHUAN BI DU LIEU 191 PACKAGE NHIỀU VERSION CỦA TIẾN TRÊN KALI
+============================================================
+1. Giai nen bo cong cu nay tai vi du: /home/kali/Cong_cu_Tien
+2. Xac dinh thu muc 'multi_version' trong ban du lieu GOC tren Kali.
+   Vi du: /home/kali/LSMB/Dataset-all-package/Dataset-Tong-hop/multi_version
+3. Mo terminal o thu muc cong cu va chay:
+   chmod +x gom_191_package_Tien.sh
+   ./gom_191_package_Tien.sh "/home/kali/LSMB/Dataset-all-package/Dataset-Tong-hop/multi_version" "/home/kali/Tien_Dataset"
+4. Neu co cac tep package_info-*.json NAM NGOAI thu muc package,
+   truyen THEM tham so thu ba la thu muc cha chua metadata:
+   ./gom_191_package_Tien.sh "/home/kali/LSMB/Dataset-all-package/Dataset-Tong-hop/multi_version" "/home/kali/Tien_Dataset" "/home/kali/LSMB/Dataset-all-package"
+5. Ket qua: /home/kali/Tien_Dataset/packages/<package>/<version>/...
+   va 20 file ZIP Tien_001_010.zip, Tien_011_020.zip,...
+   Gui tung file ZIP vao ChatGPT de phan tich va cap nhat file Excel offline.
+6. Neu may thieu tien ich: sudo apt update && sudo apt install rsync zip
+7. Neu co package thieu, xem bao_cao_thieu_package.txt va kiem tra
+   ten thu muc/vi tri nguon. KHONG tu thay package bang package khac.
+
+Script KHONG di chuyen hay xoa file goc; chi COPY. KHONG giai nen hay chay
+code tu .tar.gz, .whl, src.zip. Khong can dang nhap lai Hugging Face.
+Can kiem tra dung du lieu goc neu kho co cac package trùng tên.
