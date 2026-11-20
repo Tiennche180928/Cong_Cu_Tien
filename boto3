@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Chia dataset một package thành các ZIP nhỏ, giữ nguyên đường dẫn/từng file.
+
+Chỉ đọc file và tạo ZIP; không import/execute mã bên trong package.
+Python standard library only.
+"""
+import argparse
+import csv
+import hashlib
+import os
+import sys
+import zipfile
+from pathlib import Path
+
+COMPRESSED_EXT = ('.zip', '.whl', '.tar.gz', '.tgz', '.tar.xz', '.tar.bz2', '.gz', '.bz2', '.xz', '.7z', '.rar', '.png', '.jpg', '.jpeg', '.gif', '.pdf', '.exe', '.dll', '.so', '.pyd', '.pyc')
+
+def sha256(path):
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+def main():
+    parser = argparse.ArgumentParser(description='Chia package theo version/tệp thành nhiều ZIP độc lập, không chạy mã nguồn')
+    parser.add_argument('--source', default='~/Tien_Dataset/packages/boto3', help='Thư mục package trên Kali')
+    parser.add_argument('--out', default='~/Tien_Dataset/boto3_ZIP_nho', help='Thư mục xuất ZIP')
+    parser.add_argument('--max-mb', type=int, default=25, help='Mức tối đa dự kiến của ZIP (MB), mặc định 25')
+    args = parser.parse_args()
+    source = Path(args.source).expanduser().resolve()
+    output = Path(args.out).expanduser().resolve()
+    if not source.is_dir():
+        sys.exit(f'LOI: Khong thay thu muc nguon: {source}')
+    if args.max_mb < 6:
+        sys.exit('LOI: --max-mb phai tu 6 MB tro len')
+    if source == output or source in output.parents and output == source:
+        sys.exit('LOI: output phai khac source')
+    if output == source or source in output.parents:
+        sys.exit('LOI: khong dat output ben trong thu muc package can tach')
+    if output.exists() and any(output.iterdir()):
+        sys.exit(f'LOI: Thu muc dau ra khong rong: {output}. Hay doi --out hoac di chuyen ket qua cu.')
+    output.mkdir(parents=True, exist_ok=True)
+    pkg = source.name
+    # Allocate by UNCOMPRESSED file size conservatively; compressed ZIP remains below max in normal cases.
+    max_bytes = args.max_mb * 1024 * 1024
+    budget = max_bytes - 3 * 1024 * 1024
+    groups = []
+    for entry in sorted(source.iterdir(), key=lambda x: x.name.lower()):
+        if entry.is_symlink() and not entry.exists():
+            sys.exit(f'LOI: symlink khong hoat dong: {entry}')
+        if entry.is_file():
+            files = [entry]
+        elif entry.is_dir():
+            files = sorted((f for f in entry.rglob('*') if f.is_file()), key=lambda p: str(p.relative_to(source)))
+        else:
+            continue
+        if files:
+            groups.append((entry.name, files))
+
+    # Do not alter or flatten paths; all pieces have packages/<pkg>/<original-relative-path>.
+    batches = []
+    pending = []
+    pending_bytes = 0
+    def flush():
+        nonlocal pending, pending_bytes
+        if pending:
+            batches.append(pending)
+            pending = []
+            pending_bytes = 0
+    for topname, files in groups:
+        size = sum(f.stat().st_size for f in files)
+        if size <= budget:
+            if pending_bytes + size > budget and pending:
+                flush()
+            pending.extend(files)
+            pending_bytes += size
+        else:
+            flush()
+            for f in files:
+                fsize = f.stat().st_size
+                if fsize > budget:
+                    sys.exit(f'LOI: Tep don qua lon ({fsize:,} bytes): {f}. Bao can tach rieng.')
+                if pending_bytes + fsize > budget and pending:
+                    flush()
+                pending.append(f)
+                pending_bytes += fsize
+            flush()
+    flush()
+
+    if not batches:
+        sys.exit('LOI: Khong co file nao trong thu muc package')
+
+    seen = set()
+    index_rows = []
+    for i, batch in enumerate(batches, 1):
+        name = f'Tien_191_{pkg}_{i:03d}.zip'
+        target = output / name
+        with zipfile.ZipFile(target, 'w', allowZip64=True) as z:
+            for file in batch:
+                rel = file.relative_to(source)
+                arcname = f'packages/{pkg}/{rel.as_posix()}'
+                if arcname in seen:
+                    sys.exit(f'LOI: Tep lap: {arcname}')
+                seen.add(arcname)
+                method = zipfile.ZIP_STORED if file.name.lower().endswith(COMPRESSED_EXT) else zipfile.ZIP_DEFLATED
+                z.write(file, arcname=arcname, compress_type=method, compresslevel=6 if method == zipfile.ZIP_DEFLATED else None)
+                index_rows.append((name, arcname, file.stat().st_size, sha256(file)))
+        actual = target.stat().st_size
+        print(f'{name}: {actual/1048576:.2f} MiB | {len(batch)} files')
+        if actual > max_bytes:
+            sys.exit(f'LOI: {name} lon hon {args.max_mb} MB. Hay chay lai voi --max-mb nho hon va --out khac.')
+        with zipfile.ZipFile(target) as z:
+            bad = z.testzip()
+            if bad:
+                sys.exit(f'LOI: {name} hong tai file {bad}')
+
+    # Confirm all original files are represented exactly once.
+    all_files = set()
+    for root, dirs, names in os.walk(source, followlinks=False):
+        for name in names:
+            p = Path(root) / name
+            if p.is_file():
+                all_files.add(f'packages/{pkg}/{p.relative_to(source).as_posix()}')
+    if all_files != seen:
+        missing = sorted(all_files - seen)
+        extra = sorted(seen - all_files)
+        sys.exit(f'LOI: Khong khop file. Missing={missing[:3]}, extra={extra[:3]}')
+
+    with (output/'DANH_SACH_FILE_SHA256.csv').open('w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['zip_part', 'path_in_zip', 'original_size_bytes', 'sha256'])
+        writer.writerows(index_rows)
+    with (output/'HUONG_DAN_GIAO_FILE.txt').open('w', encoding='utf-8') as f:
+        f.write(f'Package: {pkg}\nSo file goc: {len(seen)}\nSo ZIP: {len(batches)}\n')
+        f.write('Cac file ZIP deu doc lap, moi file luu dung cau truc packages/<package>/<version>/...\n')
+        f.write('Gui lan luot cac ZIP vao ChatGPT, kem DANH_SACH_FILE_SHA256.csv mot lan.\n')
+        f.write('KHONG can giai nen src.zip, .whl, .tar.gz ben trong. Khong xoa du lieu goc.\n')
+        f.write('Kiem tra cac ZIP: python3 -m zipfile -t Tien_191_boto3_001.zip\n')
+    print(f'\nHOAN TAT: {len(seen)} files, {len(batches)} ZIP doc lap.')
+    print(f'NOI LUU: {output}')
+    print('Gui kem: DANH_SACH_FILE_SHA256.csv')
+
+if __name__ == '__main__':
+    main()
